@@ -257,7 +257,7 @@ n_decades <- length(unique(trial_df$decade))  # Assuming `decade` is the column 
 
 ```{r}
 # Create a matrix of trial counts (rows = regions, columns = decades)
-trial_count_matrix <- trials_df %>%
+trial_count_matrix <- trial_df %>%
   group_by(gadm.adm1, decade) %>%
   summarise(tried = sum(tried, na.rm = TRUE)) %>%
   spread(key = decade, value = tried, fill = 0) %>%
@@ -289,26 +289,6 @@ neighbor_ids_matrix <- t(sapply(neighbor_ids, function(x) {
 ```
 
 
-```{r}
-# Remove any region (row) from the trial count matrix that has only NA values
-valid_regions <- rowSums(is.na(trial_count_matrix)) != ncol(trial_count_matrix)
-
-# Filter all relevant matrices/vectors
-trial_count_matrix <- trial_count_matrix[valid_regions, ]
-neighbor_ids_matrix <- neighbor_ids_matrix[valid_regions, , drop = FALSE]
-n_neighbors <- n_neighbors[valid_regions]
-
-# Recalculate R (number of regions)
-n_regions <- nrow(trial_count_matrix)
-
-# Check dimensions again to be sure
-stopifnot(
-  n_regions == length(n_neighbors),
-  n_regions == nrow(neighbor_ids_matrix)
-)
-```
-
-
 
 ```{r}
 # Remove any region (row) from the trial count matrix that has only NA values
@@ -334,13 +314,18 @@ stopifnot(
 
 
 ```{r}
-# Step 1: Replace NAs with zeros
+# Make sure it's a numeric matrix before anything else
+trial_count_matrix <- as.matrix(trial_count_matrix)
+storage.mode(trial_count_matrix) <- "numeric"
+
+# Replace any NAs with 0
 trial_count_matrix[is.na(trial_count_matrix)] <- 0
 
-# Step 2: Convert to integer explicitly
-trial_count_matrix <- matrix(as.integer(trial_count_matrix), 
-                             nrow = nrow(trial_count_matrix), 
+# Convert to integer
+trial_count_matrix <- matrix(as.integer(trial_count_matrix),
+                             nrow = nrow(trial_count_matrix),
                              ncol = ncol(trial_count_matrix))
+
 
 # Step 3: Create your stan_data list
 stan_data <- list(

@@ -4,8 +4,8 @@ data {
   int<lower=1> R;              // Number of regions
   int<lower=1> T;              // Number of time periods (decades)
   array[R, T] int<lower=0> trial_count; // Count of trials matrix (region x time)
-  array[R] int<lower=1> N_neighbors;  // Number of neighbors per region
-  array[R, max(N_neighbors)] int<lower=1, upper=R> neighbor_ids; // Neighbor IDs
+  array[R] int<lower=0> N_neighbors;  // Number of neighbors per region
+  array[R, max(N_neighbors)] int<lower=0, upper=R> neighbor_ids; // Neighbor IDs
 }
 
 parameters {

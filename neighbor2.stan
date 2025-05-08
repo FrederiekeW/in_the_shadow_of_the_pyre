@@ -26,7 +26,7 @@ transformed parameters {
         int neighbor = neighbor_ids[r, n];
         neighbor_influence += trial_count[neighbor, t - 1];
       }
-      lambda[r, t] = exp(alpha + beta * neighbor_influence + region_intercepts[r]);
+      lambda[r, t] = exp(alpha + region_intercepts[r] + beta * neighbor_influence);
     }
   }
 }

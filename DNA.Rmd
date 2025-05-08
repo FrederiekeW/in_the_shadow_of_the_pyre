@@ -1,0 +1,527 @@
+---
+title: "DNA"
+author: "Freddy"
+date: "2025-05-01"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Load packages
+```{r}
+
+pacman::p_load(tidyverse, dplyr, purrr, tidyr, rstan, cmdstanr)
+```
+
+
+#### Reading in dataframes
+```{r}
+dist_matrix <- read_csv("dist_matrix_regions.csv")
+
+trials_df <- read_csv("trials.csv")
+```
+
+
+
+### Aggregate trials per region per year
+```{r}
+trial_binary <- trials_df %>%
+  filter(!is.na(year)) %>%
+  group_by(region = gadm.adm1, year) %>%
+  summarise(trial_occurred = 1, .groups = "drop")
+
+
+
+trial_activity <- trials_df %>%
+  filter(!is.na(year)) %>%
+  group_by(region = gadm.adm1, year) %>%
+  summarise(
+    total_tried = sum(tried, na.rm = TRUE),
+    total_deaths = sum(deaths, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+```
+
+
+
+```{r}
+
+
+regions <- unique(trial_binary$region)
+years <- sort(unique(trial_binary$year))
+
+all_data <- expand.grid(region = regions, year = years) %>%
+  left_join(trial_binary, by = c("region", "year")) %>%
+  mutate(trial_occurred = ifelse(is.na(trial_occurred), 0, 1))
+
+```
+
+
+
+
+
+
+```{r}
+trial_activity <- trials_df %>%
+  filter(!is.na(gadm.adm1), !is.na(decade)) %>%
+  group_by(region = gadm.adm1, decade) %>%
+  summarise(
+    trial_count = sum(tried, na.rm = TRUE),
+    trial_occurred = as.integer(trial_count > 0),
+    .groups = "drop"
+  )
+```
+
+
+
+```{r}
+all_regions <- unique(trials_df$gadm.adm1)
+all_decades <- unique(trials_df$decade)
+
+full_grid <- expand.grid(region = all_regions, decade = all_decades)
+
+all_data <- full_grid %>%
+  left_join(trial_activity, by = c("region", "decade")) %>%
+  mutate(
+    trial_count = replace_na(trial_count, 0),
+    trial_occurred = replace_na(trial_occurred, 0)
+  )
+
+```
+
+
+
+
+
+### function to find neighbours
+```{r}
+get_neighbors <- function(region_name) {
+  if (!region_name %in% rownames(dist_matrix)) return(character(0))
+  neighbors <- dist_matrix[region_name, ]
+  names(neighbors[neighbors == 1])
+}
+
+```
+
+
+### 
+```{r}
+all_data <- all_data %>%
+  rowwise() %>%
+  mutate(
+    neighbor_trial_same_decade = {
+      neighbors <- get_neighbors(region)
+      if (length(neighbors) == 0) {
+        0
+      } else {
+        lag_data <- all_data %>%
+          filter(region %in% neighbors, decade == decade)
+        as.integer(any(lag_data$trial_occurred == 1))
+      }
+    }
+  ) %>%
+  ungroup()
+
+
+
+```
+
+
+
+
+
+
+### run logistic regression to test this
+```{r}
+model <- glm(trial_occurred ~ neighbor_trial_same_decade, data = all_data, family = "binomial")
+summary(model)
+
+```
+
+
+
+
+
+
+```{r}
+
+region[t] ~ Neighbour1[t-1] * beta value #in stan
+
+
+p-ov[t-1] * beta
+
+
+beta_1[t] ~ N(mu, sigma) #of all regions
+
+
+#after doing it with previous decade, add more lags (-3 edcades, -4 deaceds), call it hierarchical beta
+#arima style self-dependence --> simplest is auto-regression
+#transforms --> putting some function f on the #beta_1[t] ~ N(mu, sigma) #of all regions
+
+
+```
+
+
+
+
+
+### 06.05.25 y
+```{r}
+
+trial_df <- read_csv("trials.csv")
+#distance_mat <- dist_matrix
+
+trial_df <- trial_df %>% 
+  drop_na(gadm.adm1)
+
+trial_activity <- trial_df %>%
+  group_by(region = gadm.adm1, decade) %>%
+  summarise(trials = sum(tried, na.rm = TRUE)) %>%
+  mutate(trial_occurred = as.integer(trials > 0)) %>%
+  ungroup()
+
+```
+
+y
+
+```{r}
+trial_wide <- trial_activity %>%
+  select(region, decade, trial_occurred) %>%
+  pivot_wider(names_from = decade, values_from = trial_occurred, values_fill = 0)
+```
+
+
+y
+```{r}
+distance_matrix <- read_csv("dist_matrix_regions.csv")
+# distance_matrix: matrix where 1 = neighboring
+get_neighbors <- function(region_name) {
+  if (!region_name %in% rownames(distance_matrix)) return(character(0))
+  neighbors <- distance_matrix[region_name, ]
+  names(neighbors[neighbors == 1])
+}
+
+```
+
+
+
+
+```{r}
+
+
+# Your trial data (long format)
+trial_activity <- trial_df %>%
+  group_by(region = gadm.adm1, decade) %>%
+  summarise(trials = sum(tried, na.rm = TRUE)) %>%
+  ungroup()
+
+# Number of regions (R) and time periods (T)
+R <- length(unique(trial_activity$region))
+T <- length(unique(trial_activity$decade))
+
+# Prepare trial_occurred matrix (R x T)
+trial_matrix <- trial_activity %>%
+  spread(key = decade, value = trials, fill = 0) %>%
+  select(-region) %>%
+  as.matrix()
+
+# List of neighbors (based on your distance matrix)
+neighbor_ids <- list()
+N_neighbors <- rep(0, R)
+
+# Assuming distance_matrix is available (e.g., with neighbors 1 and 2 as 1s)
+for (r in 1:R) {
+  neighbors <- which(distance_matrix[r, ] == 1) # Indices of neighboring regions
+  neighbor_ids[[r]] <- neighbors
+  N_neighbors[r] <- length(neighbors)
+}
+
+```
+
+
+
+
+```{r}
+# Get the number of regions (R)
+n_regions <- length(unique(trial_df$gadm.adm1))  # Assuming `gadm.adm1` is the region column
+# Get the number of decades (T)
+n_decades <- length(unique(trial_df$decade))  # Assuming `decade` is the column for time periods
+
+
+```
+
+
+
+```{r}
+# Create a matrix of trial counts (rows = regions, columns = decades)
+trial_count_matrix <- trials_df %>%
+  group_by(gadm.adm1, decade) %>%
+  summarise(tried = sum(tried, na.rm = TRUE)) %>%
+  spread(key = decade, value = tried, fill = 0) %>%
+  as.matrix()  # This will give you an R x T matrix where R = number of regions, T = number of decades
+
+```
+
+
+
+
+```{r}
+# Number of neighbors for each region
+n_neighbors <- rowSums(distance_matrix == 1)  # Sum of 1's in each row to count neighbors
+
+# Neighboring region IDs (assuming you have a matrix or vector defining which regions are neighbors)
+neighbor_ids_matrix <- apply(distance_matrix, 1, function(x) which(x == 1))  # Extract IDs of neighboring regions
+
+```
+
+
+```{r}
+max_neighbors <- max(sapply(neighbor_ids, length))
+
+neighbor_ids_matrix <- t(sapply(neighbor_ids, function(x) {
+  length(x) <- max_neighbors  # pad with NAs automatically
+  replace(x, is.na(x), 1)     # replace NA with dummy region ID (e.g., 1 or any valid region)
+}))
+
+```
+
+
+```{r}
+# Remove any region (row) from the trial count matrix that has only NA values
+valid_regions <- rowSums(is.na(trial_count_matrix)) != ncol(trial_count_matrix)
+
+# Filter all relevant matrices/vectors
+trial_count_matrix <- trial_count_matrix[valid_regions, ]
+neighbor_ids_matrix <- neighbor_ids_matrix[valid_regions, , drop = FALSE]
+n_neighbors <- n_neighbors[valid_regions]
+
+# Recalculate R (number of regions)
+n_regions <- nrow(trial_count_matrix)
+
+# Check dimensions again to be sure
+stopifnot(
+  n_regions == length(n_neighbors),
+  n_regions == nrow(neighbor_ids_matrix)
+)
+```
+
+
+
+```{r}
+# Remove any region (row) from the trial count matrix that has only NA values
+valid_regions <- rowSums(is.na(trial_count_matrix)) != ncol(trial_count_matrix)
+
+# Filter all relevant matrices/vectors
+trial_count_matrix <- trial_count_matrix[valid_regions, ]
+neighbor_ids_matrix <- neighbor_ids_matrix[valid_regions, , drop = FALSE]
+n_neighbors <- n_neighbors[valid_regions]
+
+# Recalculate R (number of regions)
+n_regions <- nrow(trial_count_matrix)
+
+# Check dimensions again to be sure
+stopifnot(
+  n_regions == length(n_neighbors),
+  n_regions == nrow(neighbor_ids_matrix)
+)
+
+```
+
+
+
+
+```{r}
+# Step 1: Replace NAs with zeros
+trial_count_matrix[is.na(trial_count_matrix)] <- 0
+
+# Step 2: Convert to integer explicitly
+trial_count_matrix <- matrix(as.integer(trial_count_matrix), 
+                             nrow = nrow(trial_count_matrix), 
+                             ncol = ncol(trial_count_matrix))
+
+# Step 3: Create your stan_data list
+stan_data <- list(
+  R = nrow(trial_count_matrix),
+  T = ncol(trial_count_matrix),
+  trial_count = trial_count_matrix,
+  N_neighbors = n_neighbors,
+  neighbor_ids = neighbor_ids_matrix
+)
+
+stan_data$neighbor_ids <- neighbor_ids_matrix
+storage.mode(stan_data$neighbor_ids) <- "integer"
+```
+
+
+
+
+```{r}
+# Compile the Stan model
+mod_simple <- cmdstanr::cmdstan_model("neighbor2.stan", cpp_options = list(stan_threads = TRUE))
+
+# Fit the model
+fit <- mod_simple$sample(
+  data = stan_data,           # Data list
+  seed = 1012,                 # Random seed for reproducibility
+  chains = 2,                 # Number of chains
+  parallel_chains = 2,        # Parallel chains
+  threads_per_chain = 1,      # Number of threads per chain
+  iter_warmup = 1000,         # Number of warmup iterations
+  iter_sampling = 1000,       # Number of sampling iterations
+  refresh = 500               # Progress display interval
+)
+
+# Print the fit summary
+print(fit)
+
+# Get posterior samples
+posterior_samples <- fit$draws()
+
+```
+
+
+
+
+
+```{r}
+is.numeric(stan_data$trial_count)
+is.numeric(stan_data$N_neighbors)
+is.numeric(stan_data$neighbor_ids)
+
+
+```
+
+
+
+
+
+
+
+
+
+
+```{r}
+# Summarize trial data by region and decade
+trial_activity <- trial_df %>%
+  group_by(region = gadm.adm1, decade) %>%
+  summarise(trials = sum(tried, na.rm = TRUE), .groups = "drop") %>%
+  mutate(trial_occurred = as.integer(trials > 0))
+
+# Get sorted list of unique regions and decades
+regions <- sort(unique(trial_activity$region))
+decades <- sort(unique(trial_activity$decade))
+
+```
+
+
+
+
+
+
+
+```{r}
+# Create a wide matrix (region x decade)
+trial_matrix <- trial_activity %>%
+  pivot_wider(names_from = decade, values_from = trials, values_fill = 0) %>%
+  arrange(factor(region, levels = regions)) %>%
+  select(-region) %>%
+  as.matrix()
+
+# Replace NAs just in case
+trial_matrix[is.na(trial_matrix)] <- 0
+trial_matrix <- apply(trial_matrix, 2, as.integer)
+
+# Pivot to wide format (regions as rows, decades as columns)
+trial_matrix <- trial_activity %>%
+  select(region, decade, trial_occurred) %>%
+  tidyr::pivot_wider(
+    names_from = decade,
+    values_from = trial_occurred,
+    values_fill = 0
+  )
+
+# Remove region column and convert to matrix
+trial_count_matrix <- trial_matrix %>%
+  select(-region) %>%
+  as.matrix()
+
+# Ensure it's numeric
+storage.mode(trial_count_matrix) <- "integer"
+
+
+
+
+```
+
+
+
+```{r}
+R <- nrow(trial_matrix)
+T <- ncol(trial_matrix)
+
+```
+
+
+```{r}
+# Assume the first column is region names (e.g., from Excel)
+region_names <- distance_matrix[[1]]             # First column
+distance_matrix <- distance_matrix[, -1]         # Remove region names column
+
+# Convert to matrix
+distance_matrix <- as.matrix(distance_matrix)
+
+# Set proper row and column names
+rownames(distance_matrix) <- region_names
+colnames(distance_matrix) <- region_names
+```
+
+
+
+
+```{r}
+R <- nrow(distance_matrix)
+
+# Make sure rownames are set correctly
+rownames(distance_matrix) <- colnames(distance_matrix)
+
+# Build list of neighbor indices per region
+neighbor_ids <- lapply(1:R, function(i) {
+  which(distance_matrix[i, ] == 1)
+})
+
+# Create vector of number of neighbors
+n_neighbors <- sapply(neighbor_ids, length)
+
+# Pad neighbor_ids into matrix
+max_neighbors <- max(n_neighbors)
+neighbor_ids_matrix <- t(sapply(neighbor_ids, function(x) {
+  length(x) <- max_neighbors
+  replace(x, is.na(x), 1)  # Replace NA with dummy valid region index (e.g. 1)
+}))
+
+```
+
+
+
+```{r}
+mod <- cmdstan_model("neighbor2.stan", cpp_options = list(stan_threads = TRUE))
+
+fit <- mod$sample(
+  data = stan_data,
+  seed = 1012,
+  chains = 2,
+  parallel_chains = 2,
+  threads_per_chain = 1,
+  iter_warmup = 1000,
+  iter_sampling = 1000,
+  refresh = 500
+)
+
+```
+
+
+
+

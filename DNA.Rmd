@@ -12,158 +12,8 @@ knitr::opts_chunk$set(echo = TRUE)
 ### Load packages
 ```{r}
 
-pacman::p_load(tidyverse, dplyr, purrr, tidyr, rstan, cmdstanr)
+pacman::p_load(tidyverse, dplyr, purrr, tidyr, rstan, cmdstanr, tidybayes, posterior, patchwork)
 ```
-
-
-#### Reading in dataframes
-```{r}
-dist_matrix <- read_csv("dist_matrix_regions.csv")
-
-trials_df <- read_csv("trials.csv")
-```
-
-
-
-### Aggregate trials per region per year
-```{r}
-trial_binary <- trials_df %>%
-  filter(!is.na(year)) %>%
-  group_by(region = gadm.adm1, year) %>%
-  summarise(trial_occurred = 1, .groups = "drop")
-
-
-
-trial_activity <- trials_df %>%
-  filter(!is.na(year)) %>%
-  group_by(region = gadm.adm1, year) %>%
-  summarise(
-    total_tried = sum(tried, na.rm = TRUE),
-    total_deaths = sum(deaths, na.rm = TRUE),
-    .groups = "drop"
-  )
-
-```
-
-
-
-```{r}
-
-
-regions <- unique(trial_binary$region)
-years <- sort(unique(trial_binary$year))
-
-all_data <- expand.grid(region = regions, year = years) %>%
-  left_join(trial_binary, by = c("region", "year")) %>%
-  mutate(trial_occurred = ifelse(is.na(trial_occurred), 0, 1))
-
-```
-
-
-
-
-
-
-```{r}
-trial_activity <- trials_df %>%
-  filter(!is.na(gadm.adm1), !is.na(decade)) %>%
-  group_by(region = gadm.adm1, decade) %>%
-  summarise(
-    trial_count = sum(tried, na.rm = TRUE),
-    trial_occurred = as.integer(trial_count > 0),
-    .groups = "drop"
-  )
-```
-
-
-
-```{r}
-all_regions <- unique(trials_df$gadm.adm1)
-all_decades <- unique(trials_df$decade)
-
-full_grid <- expand.grid(region = all_regions, decade = all_decades)
-
-all_data <- full_grid %>%
-  left_join(trial_activity, by = c("region", "decade")) %>%
-  mutate(
-    trial_count = replace_na(trial_count, 0),
-    trial_occurred = replace_na(trial_occurred, 0)
-  )
-
-```
-
-
-
-
-
-### function to find neighbours
-```{r}
-get_neighbors <- function(region_name) {
-  if (!region_name %in% rownames(dist_matrix)) return(character(0))
-  neighbors <- dist_matrix[region_name, ]
-  names(neighbors[neighbors == 1])
-}
-
-```
-
-
-### 
-```{r}
-all_data <- all_data %>%
-  rowwise() %>%
-  mutate(
-    neighbor_trial_same_decade = {
-      neighbors <- get_neighbors(region)
-      if (length(neighbors) == 0) {
-        0
-      } else {
-        lag_data <- all_data %>%
-          filter(region %in% neighbors, decade == decade)
-        as.integer(any(lag_data$trial_occurred == 1))
-      }
-    }
-  ) %>%
-  ungroup()
-
-
-
-```
-
-
-
-
-
-
-### run logistic regression to test this
-```{r}
-model <- glm(trial_occurred ~ neighbor_trial_same_decade, data = all_data, family = "binomial")
-summary(model)
-
-```
-
-
-
-
-
-
-```{r}
-
-region[t] ~ Neighbour1[t-1] * beta value #in stan
-
-
-p-ov[t-1] * beta
-
-
-beta_1[t] ~ N(mu, sigma) #of all regions
-
-
-#after doing it with previous decade, add more lags (-3 edcades, -4 deaceds), call it hierarchical beta
-#arima style self-dependence --> simplest is auto-regression
-#transforms --> putting some function f on the #beta_1[t] ~ N(mu, sigma) #of all regions
-
-
-```
-
 
 
 
@@ -343,169 +193,251 @@ storage.mode(stan_data$neighbor_ids) <- "integer"
 
 
 
+
+
+### Look at diagnostic plots, not relevant --> Don't run
+```{r}
+create_diagnostic_plots <- function(fit) {
+  # Extract posterior draws
+  draws <- as_draws_df(fit$draws())
+
+  trace_plot1 <- ggplot(draws, aes(x = .iteration, y = alpha, color = factor(.chain))) +
+    geom_line(alpha = 0.7) +
+    labs(title = "Trace Plot for alpha",
+         x = "Iteration",
+         y = "Alpha",
+         color = "Chain") +
+    theme_minimal() +
+    theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+
+  trace_plot2 <- ggplot(draws, aes(x = .iteration, y = beta, color = factor(.chain))) +
+    geom_line(alpha = 0.7) +
+    labs(title = "Trace Plot for beta",
+         x = "Iteration",
+         y = "Beta",
+         color = "Chain") +
+    theme_minimal() +
+    theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+  
+  
+  trace_plot3 <- ggplot(draws, aes(x = .iteration, y = gamma, color = factor(.chain))) +
+    geom_line(alpha = 0.7) +
+    labs(title = "Trace Plot for gamma",
+         x = "Iteration",
+         y = "Gamma",
+         color = "Chain") +
+    theme_minimal() +
+    theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+  
+  
+  trace_plot4 <- ggplot(draws, aes(x = .iteration, y = sigma, color = factor(.chain))) +
+    geom_line(alpha = 0.7) +
+    labs(title = "Trace Plot for sigma",
+         x = "Iteration",
+         y = "Sigma",
+         color = "Chain") +
+    theme_minimal() +
+    theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+  
+  trace_plot5 <- ggplot(draws, aes(x = .iteration, y = sigma_region, color = factor(.chain))) +
+    geom_line(alpha = 0.7) +
+    labs(title = "Trace Plot for sigma region",
+         x = "Iteration",
+         y = "Sigma Region",
+         color = "Chain") +
+    theme_minimal() +
+    theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+  
+
+  # Combine using patchwork if available
+  combined_trace_plot <- trace_plot1 / trace_plot2 / trace_plot3 / trace_plot4 / trace_plot5
+  return(combined_trace_plot)
+}
+```
+
+### Don't run
+```{r}
+create_diagnostic_plots(fit)
+```
+
+
+
+
+
+### Trying a second time
+```{r}
+log_trial_matrix <- log(trial_count_matrix + 1)
+
+stan_data <- list(
+  R = nrow(log_trial_matrix),         # regions
+  T = ncol(log_trial_matrix),         # decades
+  log_trials = log_trial_matrix,      # log-transformed trial counts
+  N_neighbors = n_neighbors,          # vector of length R
+  neighbor_ids = neighbor_ids_matrix,
+  max_neighbors = max_neighbors,
+  trial_count = trial_count_matrix# R x max_neighbors matrix
+)
+
+storage.mode(stan_data$neighbor_ids) <- "integer"
+
+
+```
+
+
+
+# Works as well, but a bit wonky
+
 ```{r}
 # Compile the Stan model
-mod_simple <- cmdstanr::cmdstan_model("neighbor2.stan", cpp_options = list(stan_threads = TRUE))
+mod_log <- cmdstanr::cmdstan_model("linear4.stan", cpp_options = list(stan_threads = TRUE))
 
 # Fit the model
-fit <- mod_simple$sample(
+fit_log <- mod_log$sample(
   data = stan_data,           # Data list
   seed = 1012,                 # Random seed for reproducibility
   chains = 2,                 # Number of chains
   parallel_chains = 2,        # Parallel chains
   threads_per_chain = 1,      # Number of threads per chain
-  iter_warmup = 1000,         # Number of warmup iterations
-  iter_sampling = 1000,       # Number of sampling iterations
-  refresh = 500               # Progress display interval
+  iter_warmup = 2000,         # Number of warmup iterations
+  iter_sampling = 2000,       # Number of sampling iterations
+  refresh = 1000               # Progress display interval
 )
 
 # Print the fit summary
-print(fit)
+print(fit_log)
 
 # Get posterior samples
-posterior_samples <- fit$draws()
-
-```
-
-
-
-
-
-```{r}
-is.numeric(stan_data$trial_count)
-is.numeric(stan_data$N_neighbors)
-is.numeric(stan_data$neighbor_ids)
-
-
-```
-
-
-
-
-
-
-
-
-
-
-```{r}
-# Summarize trial data by region and decade
-trial_activity <- trial_df %>%
-  group_by(region = gadm.adm1, decade) %>%
-  summarise(trials = sum(tried, na.rm = TRUE), .groups = "drop") %>%
-  mutate(trial_occurred = as.integer(trials > 0))
-
-# Get sorted list of unique regions and decades
-regions <- sort(unique(trial_activity$region))
-decades <- sort(unique(trial_activity$decade))
-
-```
-
-
-
-
-
-
-
-```{r}
-# Create a wide matrix (region x decade)
-trial_matrix <- trial_activity %>%
-  pivot_wider(names_from = decade, values_from = trials, values_fill = 0) %>%
-  arrange(factor(region, levels = regions)) %>%
-  select(-region) %>%
-  as.matrix()
-
-# Replace NAs just in case
-trial_matrix[is.na(trial_matrix)] <- 0
-trial_matrix <- apply(trial_matrix, 2, as.integer)
-
-# Pivot to wide format (regions as rows, decades as columns)
-trial_matrix <- trial_activity %>%
-  select(region, decade, trial_occurred) %>%
-  tidyr::pivot_wider(
-    names_from = decade,
-    values_from = trial_occurred,
-    values_fill = 0
-  )
-
-# Remove region column and convert to matrix
-trial_count_matrix <- trial_matrix %>%
-  select(-region) %>%
-  as.matrix()
-
-# Ensure it's numeric
-storage.mode(trial_count_matrix) <- "integer"
-
-
-
-
-```
-
-
-
-```{r}
-R <- nrow(trial_matrix)
-T <- ncol(trial_matrix)
-
+#posterior_samples <- fit_log$draws()
 ```
 
 
 ```{r}
-# Assume the first column is region names (e.g., from Excel)
-region_names <- distance_matrix[[1]]             # First column
-distance_matrix <- distance_matrix[, -1]         # Remove region names column
-
-# Convert to matrix
-distance_matrix <- as.matrix(distance_matrix)
-
-# Set proper row and column names
-rownames(distance_matrix) <- region_names
-colnames(distance_matrix) <- region_names
+fit_log$summary(variables = c("beta", "sigma"))
 ```
 
 
 
+# This here is the right one, this works
 
 ```{r}
-R <- nrow(distance_matrix)
+# Compile the Stan model
+mod_log <- cmdstanr::cmdstan_model("linear5.stan", cpp_options = list(stan_threads = TRUE))
 
-# Make sure rownames are set correctly
-rownames(distance_matrix) <- colnames(distance_matrix)
-
-# Build list of neighbor indices per region
-neighbor_ids <- lapply(1:R, function(i) {
-  which(distance_matrix[i, ] == 1)
-})
-
-# Create vector of number of neighbors
-n_neighbors <- sapply(neighbor_ids, length)
-
-# Pad neighbor_ids into matrix
-max_neighbors <- max(n_neighbors)
-neighbor_ids_matrix <- t(sapply(neighbor_ids, function(x) {
-  length(x) <- max_neighbors
-  replace(x, is.na(x), 1)  # Replace NA with dummy valid region index (e.g. 1)
-}))
-
-```
-
-
-
-```{r}
-mod <- cmdstan_model("neighbor2.stan", cpp_options = list(stan_threads = TRUE))
-
-fit <- mod$sample(
-  data = stan_data,
-  seed = 1012,
-  chains = 2,
-  parallel_chains = 2,
-  threads_per_chain = 1,
-  iter_warmup = 1000,
-  iter_sampling = 1000,
-  refresh = 500
+# Fit the model
+fit_log <- mod_log$sample(
+  data = stan_data,           # Data list
+  seed = 1012,                 # Random seed for reproducibility
+  chains = 2,                 # Number of chains
+  parallel_chains = 2,        # Parallel chains
+  threads_per_chain = 1,      # Number of threads per chain
+  iter_warmup = 2000,         # Number of warmup iterations
+  iter_sampling = 2000,       # Number of sampling iterations
+  refresh = 1000               # Progress display interval
 )
 
+# Print the fit summary
+print(fit_log)
 ```
+
+
+
+
+```{r}
+create_diagnostic_plots <- function(fit_log) {
+  # Extract posterior draws
+  draws <- as_draws_df(fit_log$draws())
+
+  trace_plot1 <- ggplot(draws, aes(x = .iteration, y = beta, color = factor(.chain))) +
+    geom_line(alpha = 0.7) +
+    labs(title = "Trace Plot for beta",
+         x = "Iteration",
+         y = "Beta",
+         color = "Chain") +
+    theme_minimal() +
+    theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+
+  trace_plot2 <- ggplot(draws, aes(x = .iteration, y = sigma_gr, color = factor(.chain))) +
+    geom_line(alpha = 0.7) +
+    labs(title = "Trace Plot for sigma_gr",
+         x = "Iteration",
+         y = "Sigma_gr",
+         color = "Chain") +
+    theme_minimal() +
+    theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+  
+  
+  trace_plot3 <- ggplot(draws, aes(x = .iteration, y = sigma, color = factor(.chain))) +
+    geom_line(alpha = 0.7) +
+    labs(title = "Trace Plot for Sigma",
+         x = "Iteration",
+         y = "Sigma",
+         color = "Chain") +
+    theme_minimal() +
+    theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+
+  # Combine using patchwork if available
+  combined_trace_plot <- trace_plot1 / trace_plot2 / trace_plot3
+  return(combined_trace_plot)
+}
+```
+
+
+```{r}
+create_diagnostic_plots(fit_log)
+```
+
+
+
+
+### Prior-posterior update checks
+```{r}
+# Convert to data frame if needed
+draws_df <- as_draws_df(fit_log$draws())
+
+# Add prior samples (same number of rows as posterior draws)
+set.seed(1012)  # for reproducibility
+draws_df <- draws_df %>%
+  mutate(
+    beta_prior = rnorm(n(), mean = 0, sd = 1),
+    sigma_prior = rexp(n(), rate = 1),
+    sigma_gr_prior = rexp(n(), rate = 1)
+  )
+
+plot_prior_vs_posterior <- function(df, param, prior_name, label) {
+  ggplot(df) +
+    geom_density(aes_string(x = param), fill = "#4e825b", alpha = 0.3) +
+    geom_density(aes_string(x = prior_name), fill = "#c41a80", alpha = 0.3) +
+    labs(
+      x = label,
+      y = "Density",
+      title = paste("Prior vs Posterior:", label)
+    ) +
+    theme_classic()
+}
+
+```
+
+```{r}
+plot_prior_vs_posterior(draws_df, "beta", "beta_prior", "β (neighbor effect)")
+plot_prior_vs_posterior(draws_df, "sigma", "sigma_prior", "σ (observation noise)")
+plot_prior_vs_posterior(draws_df, "sigma_gr", "sigma_gr_prior", "σ_gr (regional variability)")
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

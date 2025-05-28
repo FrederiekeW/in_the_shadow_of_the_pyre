@@ -1,0 +1,609 @@
+---
+title: "DNA"
+author: "Freddy"
+date: "2025-05-01"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Load packages
+```{r}
+
+pacman::p_load(tidyverse, dplyr, purrr, tidyr, rstan, cmdstanr, tidybayes, posterior, patchwork, igraph, ggraph, dplyr, pheatmap)
+```
+
+
+
+
+### Load Data
+```{r}
+
+trial_df <- read_csv("trials.csv")
+#distance_mat <- dist_matrix
+
+trial_df <- trial_df %>% 
+  drop_na(gadm.adm1)
+
+trial_activity <- trial_df %>%
+  group_by(region = gadm.adm0, decade) %>%
+  summarise(trials = sum(tried, na.rm = TRUE)) %>%
+  mutate(trial_occurred = as.integer(trials > 0)) %>%
+  ungroup()
+
+```
+
+### Read in distance matrix
+```{r}
+distance_matrix <- read_csv("dist_country.csv")
+# distance_matrix: matrix where 1 = neighboring
+get_neighbors <- function(region_name) {
+  if (!region_name %in% rownames(distance_matrix)) return(character(0))
+  neighbors <- distance_matrix[region_name, ]
+  names(neighbors[neighbors == 1])
+}
+
+```
+
+
+
+
+
+```{r}
+trial_activity <- trial_df %>%
+  group_by(region = gadm.adm0, decade) %>%
+  summarise(trials = sum(tried, na.rm = TRUE)) %>%
+  ungroup()
+
+trial_activity_country <- trial_df %>% 
+  group_by(country = gadm.adm0, decade) %>% 
+  summarise(trials = sum(tried, na.rm = TRUE)) %>% 
+  ungroup()
+
+
+# Number of regions (R) and time periods (T)
+R <- length(unique(trial_activity$region))
+T <- length(unique(trial_activity$decade))
+
+# Prepare trial_occurred matrix (R x T)
+trial_matrix <- trial_activity %>%
+  spread(key = decade, value = trials, fill = 0) %>%
+  select(-region) %>%
+  as.matrix()
+
+# List of neighbors based on  distance matrix
+neighbor_ids <- list()
+N_neighbors <- rep(0, R)
+
+
+for (r in 1:R) {
+  neighbors <- which(distance_matrix[r, ] == 1)
+  neighbor_ids[[r]] <- neighbors
+  N_neighbors[r] <- length(neighbors)
+}
+
+```
+
+
+
+
+```{r}
+# Get the number of regions 
+n_regions <- length(unique(trial_df$gadm.adm1))
+# Get the number of decades
+n_decades <- length(unique(trial_df$decade))
+
+
+```
+
+
+
+```{r}
+# Create a matrix of trial counts
+trial_count_matrix <- trial_df %>%
+  group_by(gadm.adm0, decade) %>%
+  summarise(tried = sum(tried, na.rm = TRUE)) %>%
+  spread(key = decade, value = tried, fill = 0) %>%
+  as.matrix()
+
+```
+
+
+```{r}
+# Number of neighbors for each region
+n_neighbors <- rowSums(distance_matrix == 1)  # Sum of 1's in each row to count neighbors
+
+# Neighboring region IDs 
+neighbor_ids_matrix <- apply(distance_matrix, 1, function(x) which(x == 1))  #  neighboring regions
+
+```
+
+
+
+```{r}
+# Remove any region from the trial count matrix that has only NA values
+valid_regions <- rowSums(is.na(trial_count_matrix)) != ncol(trial_count_matrix)
+
+trial_count_matrix <- trial_count_matrix[valid_regions, ]
+neighbor_ids_matrix <- neighbor_ids_matrix[valid_regions, , drop = FALSE]
+n_neighbors <- n_neighbors[valid_regions]
+
+# Recalculate R just to check
+n_regions <- nrow(trial_count_matrix)
+
+# Check dimensions again to be sure, because of a dimension mismatch earlier
+stopifnot(
+  n_regions == length(n_neighbors),
+  n_regions == nrow(neighbor_ids_matrix)
+)
+
+```
+
+
+
+```{r}
+# Make sure it's a numeric matrix before anything else
+trial_count_matrix <- as.matrix(trial_count_matrix)
+storage.mode(trial_count_matrix) <- "numeric"
+
+# Replace any NAs with 0
+trial_count_matrix[is.na(trial_count_matrix)] <- 0
+
+trial_count_matrix <- matrix(as.integer(trial_count_matrix),
+                             nrow = nrow(trial_count_matrix),
+                             ncol = ncol(trial_count_matrix))
+
+
+
+stan_data$neighbor_ids <- neighbor_ids_matrix
+storage.mode(stan_data$neighbor_ids) <- "integer"
+```
+
+
+```{r}
+# Convert tibble to data frame
+distance_df <- as.data.frame(distance_matrix)
+
+# Extract row names from the first column, then remove it
+rownames(distance_df) <- distance_df[[1]]
+distance_df[[1]] <- NULL
+
+
+```
+
+
+```{r}
+# convert to a numeric matrix
+distance_matrix <- as.matrix(distance_df)
+storage.mode(distance_matrix) <- "numeric"
+
+
+```
+
+
+```{r}
+# Step 6: Count neighbors for each region
+n_neighbors <- rowSums(distance_matrix == 1)
+
+# Step 7: Pad the neighbor indices
+max_neighbors <- max(n_neighbors)
+
+neighbor_ids_matrix <- t(apply(distance_matrix, 1, function(x) {
+  ids <- which(x == 1)
+  length(ids) <- max_neighbors  
+  replace(ids, is.na(ids), 999) #for NAs
+}))
+storage.mode(neighbor_ids_matrix) <- "integer"
+```
+
+
+### Prepare stan daata
+```{r}
+log_trial_matrix <- log(trial_count_matrix + 1)
+
+stan_data <- list(
+  R = nrow(log_trial_matrix), 
+  T = ncol(log_trial_matrix),      
+  log_trials = log_trial_matrix,    
+  N_neighbors = n_neighbors,          
+  neighbor_ids = neighbor_ids_matrix,
+  max_neighbors = max_neighbors,
+  trial_count = trial_count_matrix
+)
+
+storage.mode(stan_data$neighbor_ids) <- "integer"
+
+```
+
+
+
+#  Run the stan model
+
+```{r}
+# Compile the Stan model
+mod_log <- cmdstanr::cmdstan_model("beta_ind.stan", cpp_options = list(stan_threads = TRUE))
+
+# Fit the model
+fit_log <- mod_log$sample(
+  data = stan_data,         
+  seed = 1212,               
+  chains = 4,               
+  parallel_chains = 2,     
+  threads_per_chain = 1,   
+  iter_warmup = 5000,       
+  iter_sampling = 5000,   
+  refresh = 2000
+)
+
+
+print(fit_log)
+```
+
+
+```{r}
+fit_log$summary(variables = c( "sigma_gr"))
+```
+
+
+
+
+
+
+
+### Prior-posterior update checks
+```{r}
+
+beta_post <- draws_df %>% select(matches("^beta\\["))
+
+n_draws <- nrow(beta_post)
+n_betas <- ncol(beta_post)
+
+# Simulate prior samples 
+beta_prior <- matrix(rnorm(n_draws * n_betas, 0, 1), ncol = n_betas)
+
+# Give them the same column names as beta_post
+colnames(beta_prior) <- colnames(beta_post)
+
+
+```
+
+
+```{r}
+
+# Add 'source' labels
+beta_post_long <- beta_post %>%
+  pivot_longer(everything(), names_to = "param", values_to = "value") %>%
+  mutate(source = "Posterior")
+
+beta_prior_long <- as.data.frame(beta_prior) %>%
+  pivot_longer(everything(), names_to = "param", values_to = "value") %>%
+  mutate(source = "Prior")
+
+beta_combined <- bind_rows(beta_post_long, beta_prior_long)
+
+
+```
+
+
+
+#### Prior posterior update checks
+```{r}
+
+draws_df <- as_draws_df(fit_log$draws())
+
+
+set.seed(1012)  # for reproducibility
+draws_df <- draws_df %>%
+  mutate(
+    beta_prior = rnorm(n(), mean = 0, sd = 1),
+    sigma_prior = rexp(n(), rate = 1),
+    sigma_gr_prior = rexp(n(), rate = 1)
+  )
+
+plot_prior_vs_posterior <- function(df, param, prior_name, label) {
+  ggplot(df) +
+    geom_density(aes_string(x = param), fill = "#4e825b", alpha = 0.3) +
+    geom_density(aes_string(x = prior_name), fill = "#c41a80", alpha = 0.3) +
+    labs(
+      x = label,
+      y = "Density",
+      title = paste("Prior vs Posterior:", label)
+    ) +
+    xlim(0,4) +
+    theme_bw()
+}
+
+```
+
+```{r}
+plot_prior_vs_posterior(draws_df, "beta", "beta_prior", "β (neighbor effect)")
+plot_prior_vs_posterior(draws_df, "sigma", "sigma_prior", "σ (observation noise)")
+plot_prior_vs_posterior(draws_df, "sigma_gr", "sigma_gr_prior", "σ_gr (regional variability)")
+
+```
+
+
+
+
+
+
+
+
+##########################################################################################
+
+                                      Dynamic Network Analysis
+
+#########################################################################################
+
+```{r}
+posterior_df <- as_draws_df(fit_log$draws())
+
+# Use posterior means as point estimates
+beta_hat <- mean(posterior_df$beta)
+gr_hat <- posterior_df %>%
+  select(starts_with("gr[")) %>%
+  summarise_all(mean) %>%
+  unlist()
+```
+
+
+
+```{r}
+
+# Ensure region order matches
+region_names <- trial_wide$region
+T <- ncol(trial_count_matrix)
+R <- nrow(trial_count_matrix)
+
+# Initialize matrix for modeled influence
+influence_matrix_list <- list()
+
+for (t in 2:T) {
+  infl_matrix <- matrix(0, nrow = R, ncol = R)
+  
+  for (r in 1:R) {
+    neighbors <- neighbor_ids_matrix[r, 1:n_neighbors[r]]
+    neighbors <- neighbors[neighbors <= R]  # Safety check
+    
+    for (n in neighbors) {
+      # Influence of neighbor n on region r
+      influence <- beta_hat * log1p(trial_count_matrix[n, t - 1])
+      infl_matrix[n, r] <- influence
+    }
+
+  }
+  
+  influence_matrix_list[[t - 1]] <- infl_matrix
+}
+
+```
+
+
+
+```{r}
+write.csv(posterior_df, "posterior_df.csv")
+```
+
+#### Plotting the networks with igraph
+```{r}
+t_index <- 6
+
+# Create graph from adjacency matrix
+influence_matrix <- influence_matrix_list[[t_index]]
+colnames(influence_matrix) <- rownames(influence_matrix) <- region_names
+g <- graph_from_adjacency_matrix(influence_matrix, mode = "directed", weighted = TRUE, diag = FALSE)
+
+# ---- Node attributes ----
+trial_activity <- trial_count_matrix[, t_index]
+V(g)$size <- rescale(trial_activity, to = c(6, 20))
+V(g)$color <- "#906768"
+
+# ---- Edge attributes ----
+min_weight <- min(E(g)$weight)
+E(g)$layout_weight <- E(g)$weight
+if (min_weight <= 0) {
+  E(g)$layout_weight <- E(g)$weight + abs(min_weight) + 1e-3
+}
+
+E(g)$color <- ifelse(E(g)$weight >= 0, "#5bb450", "#D663A9")
+E(g)$alpha <- rescale(abs(E(g)$weight), to = c(0.4, 1))
+E(g)$color <- alpha(E(g)$color, E(g)$alpha)
+
+# ---- Plot ----
+png("network_1360_m.png", width = 1200, height = 800) #saaavvveee
+plot(g, 
+     edge.width = abs(E(g)$weight) / max(abs(E(g)$weight)) * 5,
+     vertex.label.cex = 2,
+     vertex.label.color = "black",
+     vertex.label.dist = 2,
+     vertex.label.degree = pi / -1.5,
+     layout = layout_with_fr(g, weights = E(g)$layout_weight))
+
+
+
+#remember to put decade AFTER t_index, so t_index + 1
+title(main = paste("Decade 1360"), cex.main = 2.5)
+dev.off()
+```
+
+
+
+
+
+
+
+
+### Results reporting - calculating means for beta
+
+
+#### beta matrix
+
+```{r}
+# Convert draws object and compute mean beta_mat
+posterior_df <- as_draws_df(fit_log$draws())
+R <- nrow(trial_count_matrix)
+
+# Get posterior mean of each beta engtry in marix
+beta_means <- posterior_df %>%
+  select(starts_with("beta_mat[")) %>%
+  summarise_all(mean) %>%
+  unlist()
+
+beta_sd <- posterior_df %>% 
+  select(starts_with("beta_mat[")) %>% 
+  summarise_all(sd) %>% 
+  unlist
+
+beta_summary <- posterior_df %>%
+  select(starts_with("beta_mat[")) %>%
+  pivot_longer(everything(), names_to = "param", values_to = "value") %>%
+  group_by(param) %>%
+  summarise(
+    ci_lower = quantile(value, 0.025),
+    ci_upper = quantile(value, 0.975),
+    .groups = "drop"
+  )
+
+mean(beta_summary[["ci_lower"]])
+mean(beta_summary[["ci_upper"]])
+mean(beta_summary$ci_lower)
+
+
+beta_mat_mean <- matrix(beta_means, nrow = R, ncol = R, byrow = TRUE)
+
+```
+```{r}
+beta_offdiag <- beta_mat_mean[lower.tri(beta_mat_mean, diag = FALSE) | upper.tri(beta_mat_mean, diag = FALSE)]
+mean_beta <- mean(beta_offdiag)
+prop_positive <- mean(beta_offdiag > 0)
+
+
+beta_offdiag
+mean_beta
+prop_positive
+mean(beta_sd)
+```
+
+
+```{r}
+# Get posterior mean of each growth rate
+gr_means <- posterior_df %>%
+  select(starts_with("gr[")) %>%
+  summarise_all(mean) %>%
+  unlist()
+
+gr_sd <- posterior_df %>% 
+  select(starts_with("gr[")) %>% 
+  summarise_all(sd) %>% 
+  unlist
+
+gr_summary <- posterior_df %>%
+  select(starts_with("gr[")) %>%
+  pivot_longer(everything(), names_to = "param", values_to = "value") %>%
+  group_by(param) %>%
+  summarise(
+    ci_lower = quantile(value, 0.025),
+    ci_upper = quantile(value, 0.975),
+    .groups = "drop"
+  )
+
+mean(gr_means)
+mean(gr_sd)
+mean(gr_summary$ci_lower)
+mean(gr_summary$ci_upper)
+
+```
+
+
+
+
+
+
+### Plot for the results section - beta coefficients for countries
+```{r}
+
+range_limit <- max(abs(beta_mat_mean))  # make symmetric scale
+breaks <- seq(-range_limit, range_limit, length.out = 101)
+
+# color length matches breaks - 1, otherwise white not at neutral
+colors <- colorRampPalette(c("#c41a80", "white", "#5bb450"))(100)
+
+
+pheatmap(beta_mat_mean,
+         cluster_rows = FALSE, cluster_cols = FALSE,
+         labels_row = region_names, labels_col = region_names,
+         color = colors,
+         breaks = breaks)
+
+```
+
+
+
+
+
+### Empirical Data visualisations/Methods section
+
+
+#### Look at empirical data
+```{r}
+#Heatmap plot
+
+ggplot(trial_activity_country, aes(x = decade, y = reorder(country, -trials), fill = trials)) +
+  geom_tile(color = "white") +
+  scale_fill_viridis_c(option ="plasma", direction = -1) +
+  labs(title = "Heatmap of Witch Trials by Country and Decade",
+       x = "Decade", y = "Modern Countries", fill = "Trials") +
+  theme_bw() +
+  theme(axis.text.y = element_text(size = 7))
+
+```
+
+
+
+
+
+### Code for plotting the map with the countries coloured in
+```{r}
+
+
+# Load map data
+europe_map <- ne_countries(scale = "medium", continent = "Europe", returnclass = "sf")
+
+included_countries <- c("Germany", "France", "Poland", "Italy", "Switzerland", "Spain", "Austria", 
+                        "Denmark", "Sweden", "United Kingdom", "Ireland", "Luxembourg", 
+                        "Netherlands", "Belgium", "Czechia")
+
+# Choose countries to be included
+europe_map <- europe_map %>%
+  mutate(included = ifelse(admin %in% included_countries, "Included", "Not Included"))
+
+
+png("map.png", width = 1200, height = 800) #saaavvveee
+
+
+ggplot(data = europe_map) +
+  geom_sf(aes(fill = included), color = "black", size = 0.3) +
+  scale_fill_manual(values = c("Included" = "#5bb450", "Not Included" = "white")) +
+  coord_sf(xlim = c(-12, 35), ylim = c(35, 72), expand = FALSE) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 16, face = "bold", margin = margin(b = 10)),
+    legend.position = "none",
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_blank()  # removes weird rectangle frame
+  ) +
+  labs(title = "Countries Included in the Witch Trial Network Analysis")
+dev.off()
+```
+
+
+
+
+
+
+
+

@@ -1,0 +1,16 @@
+,Austria,Belgium,Czech Republic,Denmark,France,Germany,Ireland,Italy,Luxembourg,Netherlands,Poland,Spain,Sweden,Switzerland,United Kingdom
+Austria,0,2,1,2,2,1,2,1,2,2,2,2,2,1,2
+Belgium,2,0,2,2,1,1,2,2,1,1,2,2,2,2,2
+Czech Republic,1,2,0,2,2,1,2,2,2,2,1,2,2,2,2
+Denmark,2,2,2,0,2,1,2,2,2,2,2,2,2,2,2
+France,2,1,2,2,0,1,2,1,1,2,2,1,2,1,2
+Germany,1,1,1,1,1,0,2,2,1,1,1,2,2,1,2
+Ireland,2,2,2,2,2,2,0,2,2,2,2,2,2,2,1
+Italy,1,2,2,2,1,2,2,0,2,2,2,2,2,1,2
+Luxembourg,2,1,2,2,1,1,2,2,0,2,2,2,2,2,2
+Netherlands,2,1,2,2,2,1,2,2,2,0,2,2,2,2,2
+Poland,2,2,1,2,2,1,2,2,2,2,0,2,2,2,2
+Spain,2,2,2,2,1,2,2,2,2,2,2,0,2,2,2
+Sweden,2,2,2,2,2,2,2,2,2,2,2,2,0,2,2
+Switzerland,1,2,2,2,1,1,2,1,2,2,2,2,2,0,2
+United Kingdom,2,2,2,2,2,2,1,2,2,2,2,2,2,2,0
